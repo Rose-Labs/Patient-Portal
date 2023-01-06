@@ -1,0 +1,484 @@
+---
+title: "ED Single Site Study (UTSW)"
+author: "Robert W. Turer, MD, MS"
+date: "12/12/2022"
+
+output:
+  html_document:
+    toc: yes
+    toc_depth: '3'
+    df_print: paged
+  html_notebook:
+    toc: yes
+    toc_float: yes
+    toc_collapsed: yes
+    toc_depth: 3
+    number_sections: yes
+    code_folding: hide
+    theme: lumen
+---
+
+Set folder path
+
+```{r}
+i_am(".here")
+folder_path <- "New CDS Analysis Data/ED Data/Patient Portal Views During ED Encounter"
+```
+
+
+# Data Cleaning and Loading
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, results = 'markup', warning = FALSE, message = FALSE, warning = FALSE)
+
+pacman::p_load(tidyverse, here, Hmisc, rms, table1, kableExtra, missRanger, lubridate, conflicted)
+
+conflict_prefer("filter", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("distinct", "tidylog")
+conflict_prefer("mutate", "dplyr")
+conflict_prefer("summarise", "dplyr")
+conflict_prefer("summarize", "dplyr")
+conflict_prefer("group_by", "dplyr")
+conflict_prefer("lag", "dplyr")
+conflict_prefer("label", "Hmisc")
+conflict_prefer("label<-", "Hmisc")
+
+conflict_scout()
+
+# packages <- c("tidyverse", "magrittr", "Hmisc", "rms", "table1", "kableExtra", "missRanger", "lubridate") 
+# 
+# # Install not-yet-installed packages
+# installed_packages <- packages %in% rownames(installed.packages())
+# if (any(installed_packages == FALSE)) {
+#   install.packages(packages[!installed_packages])
+# }
+# 
+# # Load Packages
+# invisible(lapply(packages, library, character.only = TRUE))
+
+source("table1functions.R")
+
+name_repair_lower_snake <- function(nms) tolower(gsub("[ ]", "_", nms))
+
+# @TODO: Recommend changing locale to US/Eastern, etc. based on your site's timestamps.
+
+ed_base <- read_delim(here(folder_path, "ed_base.txt"), "\t", 
+                      escape_double = FALSE, 
+                      trim_ws = TRUE, 
+                      na = c("", "NA", "NULL"),
+                      locale = locale(tz = "US/Eastern"),
+                      name_repair = name_repair_lower_snake)
+
+ed_mychart_logins <- read_delim(here(folder_path, "ed_mychart_logins.txt"), "\t", 
+                      escape_double = FALSE, 
+                      trim_ws = TRUE, 
+                      na = c("", "NA", "NULL"),
+                      locale = locale(tz = "US/Eastern"),
+                      name_repair = name_repair_lower_snake)
+
+ed_viewed_notes <- read_delim(here(folder_path, "ed_viewed_notes.txt"), "\t", 
+                      escape_double = FALSE, 
+                      trim_ws = TRUE, 
+                      na = c("", "NA", "NULL"),
+                      name_repair = name_repair_lower_snake,
+                      locale = locale(tz = "US/Eastern"))
+
+ed_viewed_orders <- read_delim(here(folder_path, "ed_viewed_orders.txt"), "\t", 
+                      escape_double = FALSE, 
+                      trim_ws = TRUE, 
+                      locale = locale(tz = "US/Eastern"),
+                      name_repair = name_repair_lower_snake,
+                      na = c("", "NA", "NULL"))
+```
+
+
+```{r aggregate_logins, include = FALSE} 
+
+ed_login_counts <- ed_mychart_logins %>% 
+  group_by(pat_enc_csn_id) %>% 
+  summarise(n_logins = n())
+
+ed_note_counts <- ed_viewed_notes %>% 
+  group_by(pat_enc_csn_id) %>% 
+  summarise(n_notes = n())
+
+ed_any_result_counts <- ed_viewed_orders %>% 
+  group_by(pat_enc_csn_id) %>%
+  summarise(n_any_results = n())
+
+ed_covid_counts <- ed_viewed_orders %>% 
+  filter(procedure_study_category == "COVID-19") %>%
+  group_by(pat_enc_csn_id) %>%
+  summarise(n_covid = n())
+
+ed_lab_counts <- ed_viewed_orders %>% 
+  filter(procedure_study_category == "Laboratory") %>%
+  group_by(pat_enc_csn_id) %>%
+  summarise(n_labs = n())
+
+ed_card_neuro_counts <- ed_viewed_orders %>% 
+  filter(procedure_study_category == "Cardiology/Neurology") %>%
+  group_by(pat_enc_csn_id) %>%
+  summarise(n_cardneuro = n())
+
+ed_imaging_counts <- ed_viewed_orders %>% 
+  filter(procedure_study_category == "Imaging") %>%
+  group_by(pat_enc_csn_id) %>%
+  summarise(n_imaging = n())
+
+ed_other_counts <- ed_viewed_orders %>% 
+  filter(procedure_study_category == "Other") %>%
+  group_by(pat_enc_csn_id) %>%
+  summarise(n_other = n())
+
+# Joins and Counts
+ed <- ed_base %>% 
+  left_join(ed_login_counts, by="pat_enc_csn_id") %>% 
+  mutate(n_logins = replace_na(n_logins, 0)) %>%
+  left_join(ed_note_counts, by ="pat_enc_csn_id") %>%
+  mutate(n_notes = replace_na(n_notes, 0)) %>%
+  left_join(ed_any_result_counts,by = "pat_enc_csn_id") %>%
+  mutate(n_any_results = replace_na(n_any_results, 0)) %>%
+  left_join(ed_covid_counts, by ="pat_enc_csn_id") %>%
+  mutate(n_covid = replace_na(n_covid, 0)) %>%
+  left_join(ed_lab_counts, by ="pat_enc_csn_id") %>%
+  mutate(n_labs = replace_na(n_labs, 0)) %>%
+  left_join(ed_card_neuro_counts, by ="pat_enc_csn_id") %>%
+  mutate(n_cardneuro = replace_na(n_cardneuro, 0)) %>%
+  left_join(ed_imaging_counts, by ="pat_enc_csn_id") %>%
+  mutate(n_imaging = replace_na(n_imaging, 0)) %>%
+  left_join(ed_other_counts, by ="pat_enc_csn_id") %>%
+  mutate(n_other = replace_na(n_other, 0))
+
+
+# Make dichotomous
+ed %<>% mutate(login = factor(if_else(n_logins > 0, "Yes", "No")),
+               notes = factor(if_else(n_notes > 0, "Yes", "No")),
+               anyresults = factor(if_else(n_any_results > 0, "Yes", "No")),
+               covid = factor(if_else(n_covid > 0, "Yes", "No")),
+               labs = factor(if_else(n_labs > 0, "Yes", "No")),
+               cardneuro = factor(if_else(n_cardneuro > 0, "Yes", "No")),
+               imaging = factor(if_else(n_imaging > 0, "Yes", "No")),
+               other = factor(if_else(n_other > 0, "Yes", "No")),
+               )
+```
+
+```{r clean_names_types, include=FALSE}
+
+ed %<>% mutate(esi = factor(esi),
+                sex = factor(sex, levels = 
+                              c("Male", "Female")),
+                hispanic = factor(recode(ethnic_group, `Not Hispanic or Latino` = "No",
+                                 `Hispanic or Latino` = "Yes")),
+                americanind = factor(americanind, levels = c(1, 0), labels = c("Yes", "No")),
+                asian = factor(asian, levels = c(1, 0), labels = c("Yes", "No")),
+                black = factor(black, levels = c(1, 0), labels = c("Yes", "No")),
+                hawai = factor(hawai, levels = c(1, 0), labels = c("Yes", "No")),
+                white = factor(white, levels = c(1, 0), labels = c("Yes", "No")),
+               # @Update (12/19/22) Updated due to  
+               race_other = case_when(
+                  is.na(asian) & is.na(black) & is.na(hawai) & is.na(white) & is.na(race_other) ~ 1, 
+                  TRUE ~ race_other
+                ),
+                race_other = factor(race_other, levels = c(1, 0), labels = c("Yes", "No")),
+                insurance = factor(insurance_type, levels = c("Commercial", "Medicare", "Medicaid", "Other", "Self-Pay")),
+                mychart = mychart_status_at_arrival,
+                mychart = factor(case_when(
+                  mychart == "Activated" ~ "Yes",
+                  !is.na(mychart) ~ "No",
+                  TRUE ~ NA_character_
+                )),
+               date = floor_date(adt_arrival_dttm, unit="day"),
+               disposition = factor(case_when(
+                 disposition == "Discharged" ~ "Discharged",
+                 disposition == "Expired" ~ "Admitted",
+                 disposition == "Admitted" ~ "Admitted",
+                 disposition == "Internal Transfer" ~ "Admitted",
+                 disposition == "External Transfer" ~ "Admitted",
+                 !is.na(disposition) ~ "Other",
+                 TRUE ~ "Other"
+               ))
+               ) %>% 
+  select(-c(mychart_status_at_arrival, ethnic_group))
+
+# Hmisc::label(ed$esi) <- "ESI"
+# Hmisc::label(ed$sex) <- "Sex"
+# Hmisc::label(ed$white) <- "White"
+# Hmisc::label(ed$black) <- "Black"
+# Hmisc::label(ed$hispanic) <- "Hispanic" 
+# Hmisc::label(ed$asian) <- "Asian"
+# Hmisc::label(ed$americanind) <- "American Indian or Alaska Native"
+# Hmisc::label(ed$hawai) <- "Native Hawaiian or Pacific Islander"
+# Hmisc::label(ed$race_other) <- "Other Race"
+# Hmisc::label(ed$insurance) <- "Insurance"
+# Hmisc::label(ed$mychart) <- "MyChart Activated at Arrival"
+# Hmisc::label(ed$login) <- "Logged In During ED Stay"
+# Hmisc::label(ed$notes) <- "Notes Viewed"
+# Hmisc::label(ed$anyresults) <- "Any Results Viewed"
+# Hmisc::label(ed$covid) <- "COVID Results Viewed"
+# Hmisc::label(ed$labs) <- "Labs Viewed"
+# Hmisc::label(ed$cardneuro) <- "Card/Neuro Results Viewed"
+# Hmisc::label(ed$imaging) <- "Imaging Results Viewed"
+# Hmisc::label(ed$other) <- "Other Results Viewed"
+# Hmisc::label(ed$disposition) <- "Disposition"
+# Hmisc::label(ed$date) <- "Encounter Date"
+
+```
+
+``` {r time_agg, include=FALSE}
+
+## Create aggregated time series data set of daily behavior for analysis and plotting shortly
+admitted_timeseries <- tibble(date = ceiling_date(as.POSIXct(seq(ymd('2021-04-05', tz="US/Central"),ymd('2022-04-04', tz="US/Eastern"), 
+                                                                 by = 'days')), unit="day"), disposition = "Admitted")
+
+discharged_timeseries <- tibble(date = ceiling_date(as.POSIXct(seq(ymd('2021-04-05', tz="US/Central"),ymd('2022-04-04', tz="US/Eastern"), 
+                                                                   by = 'days')), unit="day"), disposition = "Discharged")
+
+other_timeseries <- tibble(date = ceiling_date(as.POSIXct(seq(ymd('2021-04-05', tz="US/Central"),ymd('2022-04-04', tz="US/Eastern"), 
+                                                              by = 'days')), unit="day"), disposition = "Other")
+
+timeseries <- bind_rows(admitted_timeseries, discharged_timeseries, other_timeseries) %>% 
+  mutate(disposition = as_factor(disposition),
+         date =as.character(date))
+
+timeseries %<>% 
+  left_join(ed %>% 
+              mutate(date =as.character(date)) %>% 
+              group_by(date, disposition) %>%
+              dplyr::summarise(total = n()) %>% 
+              dplyr::select(date, disposition, total)
+                          ) %>%
+  replace_na(list(total = 0))
+
+login_daily <- timeseries %>% 
+  left_join(ed %>% 
+              mutate(date =as.character(date)) %>% 
+              group_by(date, login, disposition) %>%
+  summarise(ct = n(), .groups="keep") %>%
+  filter(login == "Yes") %>%
+  mutate(activity = "Logins") %>%
+    ungroup() %>% 
+    select(date, activity, disposition, ct)) %>%
+    replace_na(list(ct = 0, activity = "Logins")) 
+  
+notes_daily <- timeseries %>% 
+  left_join(ed %>% mutate(date =as.character(date)) %>% 
+              group_by(date, notes, disposition) %>%
+  summarise(ct = (n())) %>%
+  filter(notes == "Yes") %>%
+  select(-notes) %>%
+  mutate(activity = "Notes") %>%
+    ungroup() %>% 
+    select(date, activity, disposition, ct)) %>%
+    replace_na(list(ct = 0, activity = "Notes"))
+
+anyresults_daily <- timeseries %>% 
+  left_join(ed %>% 
+              mutate(date =as.character(date)) %>% 
+              group_by(date, anyresults, disposition) %>%
+  summarise(ct = (n())) %>%
+  filter(anyresults == "Yes") %>%
+  select(-anyresults) %>%
+  mutate(activity = "Any Results") %>%
+    ungroup() %>% 
+    select(date, activity, disposition, ct)) %>%
+    replace_na(list(ct = 0, activity = "Any Results"))
+
+covid_daily <- timeseries %>% 
+  left_join(ed %>% 
+              mutate(date =as.character(date)) %>% 
+              group_by(date, covid, disposition) %>%
+  summarise(ct = (n())) %>%
+  filter(covid == "Yes") %>%
+  select(-covid) %>%
+  mutate(activity = "COVID") %>%
+    ungroup() %>% 
+    select(date, activity, disposition, ct)) %>%
+    replace_na(list(ct = 0, activity = "COVID"))
+
+labs_daily <- timeseries %>% 
+  left_join(ed %>% 
+              mutate(date =as.character(date)) %>% 
+              group_by(date, labs, disposition) %>%
+  summarise(ct = (n())) %>%
+  filter(labs == "Yes") %>%
+  select(-labs) %>%
+  mutate(activity = "Labs") %>%
+    ungroup() %>% 
+    select(date, activity, disposition, ct)) %>%
+    replace_na(list(ct = 0, activity = "Labs"))
+
+cardneuro_daily <-  timeseries %>% 
+  left_join(ed %>% 
+              mutate(date =as.character(date)) %>% 
+              group_by(date, cardneuro, disposition) %>%
+  summarise(ct = (n())) %>%
+  filter(cardneuro == "Yes") %>%
+  select(-cardneuro) %>%
+  mutate(activity = "Cards/Neuro") %>%
+    ungroup() %>% 
+    select(date, activity, disposition, ct)) %>%
+    replace_na(list(ct = 0, activity = "Cards/Neuro"))
+
+imaging_daily <- timeseries %>% 
+  left_join(ed %>% 
+              mutate(date =as.character(date)) %>% 
+              group_by(date, imaging, disposition) %>%
+  summarise(ct = (n())) %>%
+  filter(imaging == "Yes") %>%
+  select(-imaging) %>%
+  mutate(activity = "Imaging") %>%
+    ungroup() %>% 
+    select(date, activity, disposition, ct)) %>%
+    replace_na(list(ct = 0, activity = "Imaging"))
+
+other_daily <- timeseries %>% 
+  left_join(ed %>% 
+              mutate(date =as.character(date)) %>% 
+              group_by(date, other, disposition) %>%
+  summarise(ct = (n())) %>%
+  filter(other == "Yes") %>%
+  select(-other) %>%
+  mutate(activity = "Other") %>%
+    ungroup() %>% 
+    select(date, activity, disposition, ct)) %>%
+    replace_na(list(ct = 0, activity = "Other"))
+
+edday <- bind_rows(login_daily, notes_daily, anyresults_daily, covid_daily, labs_daily, cardneuro_daily, imaging_daily, other_daily) %>%
+  mutate(pct = ct/total)
+
+edweek_by_disposition <- edday %>% select(-pct) %>%
+                    group_by(week = floor_date(as_date(date), unit = "week"), disposition, activity) %>% 
+                    summarise(ct = sum(ct), total = sum(total), pct = ct/total)
+
+edweek_overall <- edweek_by_disposition %>% select(-pct) %>%
+                   group_by(week, activity) %>%
+                   summarise(ct = sum(ct), total = sum(total), pct = ct/total)
+                    
+
+``` 
+
+Re-label stuff 
+
+```{r}
+Hmisc::label(ed$esi) <- "ESI"
+Hmisc::label(ed$sex) <- "Sex"
+Hmisc::label(ed$white) <- "White"
+Hmisc::label(ed$black) <- "Black"
+Hmisc::label(ed$hispanic) <- "Hispanic" 
+Hmisc::label(ed$asian) <- "Asian"
+Hmisc::label(ed$americanind) <- "American Indian or Alaska Native"
+Hmisc::label(ed$hawai) <- "Native Hawaiian or Pacific Islander"
+Hmisc::label(ed$race_other) <- "Other Race"
+Hmisc::label(ed$insurance) <- "Insurance"
+Hmisc::label(ed$mychart) <- "MyChart Activated at Arrival"
+Hmisc::label(ed$login) <- "Logged In During ED Stay"
+Hmisc::label(ed$notes) <- "Notes Viewed"
+Hmisc::label(ed$anyresults) <- "Any Results Viewed"
+Hmisc::label(ed$covid) <- "COVID Results Viewed"
+Hmisc::label(ed$labs) <- "Labs Viewed"
+Hmisc::label(ed$cardneuro) <- "Card/Neuro Results Viewed"
+Hmisc::label(ed$imaging) <- "Imaging Results Viewed"
+Hmisc::label(ed$other) <- "Other Results Viewed"
+Hmisc::label(ed$disposition) <- "Disposition"
+Hmisc::label(ed$date) <- "Encounter Date"
+```
+
+
+
+# Table 1 Population Statistics (distribution-worthy)
+
+Note, this distribution-ready table does not include missing entries in either counts or percentages. 
+
+See the "describe" section at the bottom for more holistic representation of data.
+
+```{r population_stats}
+
+# Overall population
+# Prep Yes-No variables for display as labelled logicals
+t1.df <- ed %>% mutate(across(where(is.yn_factor), logical_factor_to_labelled_logical))
+
+
+t1 <- table1(~ esi + sex + white + black + hispanic + asian + americanind + hawai + race_other + insurance + 
+         mychart + login + notes + 
+         anyresults + covid + labs + cardneuro + imaging + other | disposition,
+             data=t1.df, overall="Overall", render=rndr, render.continuous = my.render.cont,
+             render.missing=NULL) 
+
+kable(t1, caption = "Table 1 - Population Characteristics") %>%
+  kable_classic(full_width = F, html_font = "Cambria", position = "center", ) %>% 
+
+  pack_rows("Race (Multiple Select)", 11, 17, bold=FALSE) %>%
+  pack_rows("Result Type Viewed (Multiple select)", 27, 32, bold=FALSE)
+
+```
+
+# Time series plots of proportions of patients performing each activity over time.
+
+``` {r time_plots}
+
+weekly_plot_overall <- ggplot(edweek_overall %>% filter(activity %in% c("Any Results", "Logins", "Notes")), 
+                      aes(x = week, y = pct, ymin = 0, colour = activity)) +
+  geom_point() +
+  geom_line() +
+  theme_classic() +
+  scale_y_continuous(labels = scales::percent) +
+  xlab('Arrival Date') +
+  ylab('Percentage of ED Patients Performing Activity')
+
+
+weekly_plot_results <- ggplot(edweek_overall %>% filter(!(activity %in% c("Any Results", "Logins", "Notes"))), 
+                       aes(x = week, y = pct, ymin = 0, colour = activity)) +
+  geom_point() +
+  geom_line() +
+  theme_classic() +
+  scale_y_continuous(labels = scales::percent) +
+  xlab('Arrival Date') +
+  ylab('Percentage of ED Patients Performing Activity')
+
+weekly_plot_overall_by_dispo <- ggplot(edweek_by_disposition %>% filter(activity %in% c("Any Results", "Logins", "Notes")), 
+                      aes(x = week, y = pct, ymin = 0, colour = activity)) +
+  geom_point() +
+  geom_line() +
+  theme_classic() +
+  scale_y_continuous(labels = scales::percent) +
+  xlab('Arrival Date') +
+  ylab('Percentage of ED Patients Performing Activity') + 
+  facet_grid(disposition ~ .)
+
+weekly_plot_results_by_dispo <- ggplot(edweek_by_disposition %>% filter(!(activity %in% c("Any Results", "Logins", "Notes"))), 
+                      aes(x = week, y = pct, ymin = 0, colour = activity)) +
+  geom_point() +
+  geom_line() +
+  theme_classic() +
+  scale_y_continuous(labels = scales::percent) +
+  xlab('Arrival Date') +
+  ylab('Percentage of ED Patients Performing Activity') + 
+  facet_grid(disposition ~ .)
+
+
+weekly_plot_overall 
+weekly_plot_results
+weekly_plot_overall_by_dispo
+weekly_plot_results_by_dispo
+
+```
+
+
+``` {r export_data, include=FALSE}
+
+# @TODO: ***Insert your site name here and update file ***
+edday %<>% mutate(site = "MGB")
+
+
+edday %>% 
+  write_csv(file = here(folder_path, "mgb_edday.csv"))
+```
+
+
+# Data Exploration (Technical)
+
+```{r data exploration}
+html(describe(ed))
+```
